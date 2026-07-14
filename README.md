@@ -10,7 +10,16 @@ A dashboard for pulling Google Maps reviews across the stores you manage and gen
 npm install
 ```
 
-### 2. Get a Google Places API key
+### 2. Provision a Postgres database
+
+Any Postgres works. Easiest options:
+
+- **[Neon](https://console.neon.tech)** — free tier, HTTP-optimized, works with Vercel out of the box
+- **Vercel Postgres** — provisioned via the Vercel dashboard; env vars auto-attached to the project
+
+Grab the connection string (looks like `postgres://user:pass@host/db?sslmode=require`).
+
+### 3. Get a Google Places API key
 
 1. Go to [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials)
 2. Create (or select) a project
@@ -18,25 +27,30 @@ npm install
 4. Create an API key
 5. (Recommended) Restrict the key to "Places API (New)" only
 
-### 3. Configure the environment
+### 4. Configure environment variables
+
+Local dev:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Edit `.env.local` and paste your API key:
+Edit `.env.local`:
 
 ```
+DATABASE_URL=postgres://...
 GOOGLE_PLACES_API_KEY=AIza...
 ```
 
-### 4. Run
+**On Vercel:** add both `DATABASE_URL` (or use Vercel Postgres, which sets `POSTGRES_URL` automatically) and `GOOGLE_PLACES_API_KEY` under Project Settings → Environment Variables.
+
+### 5. Run
 
 ```bash
 npm run dev
 ```
 
-Open http://localhost:3000
+Open http://localhost:3000. Schema is created automatically on first request.
 
 ## How it works
 
@@ -51,16 +65,16 @@ Open http://localhost:3000
 
 ## Important: about the 5-review cap
 
-Google Places API returns **only the 5 most recent reviews** per request. This app stores every review it fetches so that history accumulates over time. To build up meaningful data, click **Sync now** on each store periodically (e.g. daily).
+Google Places API returns **only the 5 most recent reviews** per request. This app stores every review it fetches so history accumulates over time. To build up meaningful data, click **Sync now** on each store periodically (e.g. daily).
 
-## Data
+## Deploy
 
-Reviews and store metadata are stored locally in `data/store-manager.db` (SQLite). The `data/` folder is git-ignored.
+Deploys to Vercel as-is once `DATABASE_URL` and `GOOGLE_PLACES_API_KEY` are set in project settings.
 
 ## Tech
 
-- Next.js 15 (App Router) + React 19
+- Next.js 16 (App Router) + React 19
 - TypeScript
 - Tailwind CSS
-- SQLite via `better-sqlite3`
+- Postgres via `@neondatabase/serverless` (HTTP driver, works on Vercel edge/serverless)
 - Recharts for visualizations

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import db from "@/lib/db";
+import { sql, ensureSchema } from "@/lib/db";
 import { getStoreReport } from "@/lib/reports";
 
 export async function GET(
@@ -7,7 +7,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const report = getStoreReport(id);
+  const report = await getStoreReport(id);
   if (!report) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -19,8 +19,11 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const result = db.prepare("DELETE FROM stores WHERE id = ?").run(id);
-  if (result.changes === 0) {
+  await ensureSchema();
+  const rows = (await sql`
+    DELETE FROM stores WHERE id = ${id} RETURNING id
+  `) as Array<{ id: string }>;
+  if (rows.length === 0) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   return NextResponse.json({ ok: true });
