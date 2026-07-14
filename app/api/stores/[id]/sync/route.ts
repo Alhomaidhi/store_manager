@@ -5,14 +5,13 @@ export async function POST(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id } = await params;
   try {
+    const { id } = await params;
     const result = await syncStore(id);
     return NextResponse.json(result);
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Sync failed" },
-      { status: 500 }
-    );
+    const message = err instanceof Error ? err.message : "Sync failed";
+    console.error("[api/stores/[id]/sync]", err);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
