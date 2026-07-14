@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import db from "@/lib/db";
+import { sql, ensureSchema, mapStore } from "@/lib/db";
 import { getPlaceDetails } from "@/lib/google-places";
 import { upsertReviews } from "@/lib/store-service";
 
@@ -10,10 +10,9 @@ const createSchema = z.object({
 });
 
 export async function GET() {
-  const stores = db
-    .prepare("SELECT * FROM stores ORDER BY name ASC")
-    .all();
-  return NextResponse.json({ stores });
+  await ensureSchema();
+  const rows = (await sql`SELECT * FROM stores ORDER BY name ASC`) as Record<string, unknown>[];
+  return NextResponse.json({ stores: rows.map(mapStore) });
 }
 
 export async function POST(req: NextRequest) {
@@ -24,34 +23,29 @@ export async function POST(req: NextRequest) {
   }
   const { placeId } = parsed.data;
 
-  const existing = db
-    .prepare("SELECT * FROM stores WHERE place_id = ?")
-    .get(placeId);
-  if (existing) {
-    return NextResponse.json({ store: existing, alreadyExisted: true });
+  await ensureSchema();
+
+  const existing = (await sql`
+    SELECT * FROM stores WHERE place_id = ${placeId}
+  `) as Record<string, unknown>[];
+  if (existing.length > 0) {
+    return NextResponse.json({ store: mapStore(existing[0]), alreadyExisted: true });
   }
 
   try {
     const details = await getPlaceDetails(placeId);
     const id = randomUUID();
     const now = Date.now();
-    db.prepare(
-      `INSERT INTO stores (id, place_id, name, address, rating, total_ratings, google_url, created_at, last_synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      id,
-      details.placeId,
-      details.name,
-      details.address,
-      details.rating,
-      details.totalRatings,
-      details.googleUrl,
-      now,
-      now
-    );
-    upsertReviews(id, details.reviews);
-    const store = db.prepare("SELECT * FROM stores WHERE id = ?").get(id);
-    return NextResponse.json({ store });
+    await sql`
+      INSERT INTO stores
+        (id, place_id, name, address, rating, total_ratings, google_url, created_at, last_synced_at)
+      VALUES
+        (${id}, ${details.placeId}, ${details.name}, ${details.address},
+         ${details.rating}, ${details.totalRatings}, ${details.googleUrl}, ${now}, ${now})
+    `;
+    await upsertReviews(id, details.reviews);
+    const inserted = (await sql`SELECT * FROM stores WHERE id = ${id}`) as Record<string, unknown>[];
+    return NextResponse.json({ store: mapStore(inserted[0]) });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to add store" },

@@ -21,7 +21,7 @@ export default async function StorePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const report = getStoreReport(id);
+  const report = await getStoreReport(id);
   if (!report) notFound();
 
   const { store, reviewCount, avgRating, ratingDistribution, monthlyVolume, topKeywords, recentNegative } = report;
