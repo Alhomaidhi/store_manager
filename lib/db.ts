@@ -1,38 +1,27 @@
-import { neon, NeonQueryFunction } from "@neondatabase/serverless";
+import { neon } from "@neondatabase/serverless";
 
-let _sql: NeonQueryFunction<false, false> | null = null;
+const BUILD_PLACEHOLDER = "postgres://placeholder:pw@localhost:5432/db";
 
-function getConnectionString(): string {
-  const cs =
-    process.env.DATABASE_URL ||
-    process.env.POSTGRES_URL ||
-    process.env.POSTGRES_URL_NON_POOLING;
-  if (!cs) {
-    throw new Error(
-      "No Postgres connection string. Set DATABASE_URL (or POSTGRES_URL) — see .env.example."
-    );
-  }
-  return cs;
-}
+const connectionString =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  process.env.POSTGRES_URL_NON_POOLING ||
+  BUILD_PLACEHOLDER;
 
-export const sql: NeonQueryFunction<false, false> = new Proxy(
-  {} as NeonQueryFunction<false, false>,
-  {
-    get(_target, prop) {
-      if (!_sql) _sql = neon(getConnectionString());
-      const val = (_sql as unknown as Record<string | symbol, unknown>)[prop];
-      return typeof val === "function" ? (val as (...a: unknown[]) => unknown).bind(_sql) : val;
-    },
-    apply(_target, _thisArg, argArray) {
-      if (!_sql) _sql = neon(getConnectionString());
-      return (_sql as unknown as (...a: unknown[]) => unknown)(...argArray);
-    },
-  }
-);
+export const sql = neon(connectionString);
+
+const usingPlaceholder = connectionString === BUILD_PLACEHOLDER;
 
 let schemaReady: Promise<void> | null = null;
 
 export function ensureSchema(): Promise<void> {
+  if (usingPlaceholder) {
+    return Promise.reject(
+      new Error(
+        "No Postgres connection string. Set DATABASE_URL or POSTGRES_URL — see .env.example."
+      )
+    );
+  }
   if (!schemaReady) {
     schemaReady = (async () => {
       await sql`
