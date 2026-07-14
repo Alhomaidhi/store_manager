@@ -16,8 +16,8 @@ function formatRelative(ts: number | null): string {
   return `${days}d ago`;
 }
 
-export default function Dashboard() {
-  const summary = getDashboardSummary();
+export default async function Dashboard() {
+  const summary = await getDashboardSummary();
 
   return (
     <div className="space-y-6">
