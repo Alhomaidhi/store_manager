@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { sql, ensureSchema } from "./db";
-import { PlaceReview, getPlaceDetails } from "./google-places";
+import { PlaceReview, getPlaceDetails } from "./outscraper";
 
 export async function upsertReviews(
   storeId: string,

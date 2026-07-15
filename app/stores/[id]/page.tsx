@@ -168,8 +168,8 @@ export default async function StorePage({
       </div>
 
       <div className="text-xs text-[var(--muted)] text-center pt-4">
-        Google Places API returns only the 5 most recent reviews per sync.
-        Click <b>Sync now</b> periodically to accumulate history.
+        Each sync pulls the most recent reviews via Outscraper (100 by
+        default). Click <b>Sync now</b> periodically to keep history fresh.
       </div>
     </div>
   );

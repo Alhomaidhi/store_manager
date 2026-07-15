@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { sql, ensureSchema, mapStore } from "@/lib/db";
-import { getPlaceDetails } from "@/lib/google-places";
+import { getPlaceDetails } from "@/lib/outscraper";
 import { upsertReviews } from "@/lib/store-service";
 
 const createSchema = z.object({

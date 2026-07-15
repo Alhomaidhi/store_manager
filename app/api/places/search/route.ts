@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchPlaces } from "@/lib/google-places";
+import { searchPlaces } from "@/lib/outscraper";
 
 export async function GET(req: NextRequest) {
   const query = req.nextUrl.searchParams.get("q");
