@@ -19,14 +19,6 @@ function requireKey(): string {
   return API_KEY;
 }
 
-export interface PlaceSearchResult {
-  placeId: string;
-  name: string;
-  address: string;
-  rating?: number;
-  userRatingCount?: number;
-}
-
 export interface PlaceReview {
   authorName: string | null;
   authorUrl: string | null;
@@ -85,30 +77,16 @@ async function pollResults(
   throw new Error("Outscraper request timed out — try again in a minute.");
 }
 
-async function outscraperRequest(
+async function outscraperGet(
   path: string,
-  options:
-    | { method: "GET"; params: Record<string, string> }
-    | { method: "POST"; body: Record<string, unknown> }
+  params: Record<string, string>
 ): Promise<Record<string, unknown>[]> {
   const key = requireKey();
   const url = new URL(`${BASE}${path}`);
-  let init: RequestInit;
-  if (options.method === "GET") {
-    for (const [k, v] of Object.entries(options.params)) {
-      url.searchParams.set(k, v);
-    }
-    url.searchParams.set("async", "false");
-    init = { headers: { "X-API-KEY": key } };
-  } else {
-    init = {
-      method: "POST",
-      headers: { "X-API-KEY": key, "Content-Type": "application/json" },
-      body: JSON.stringify({ ...options.body, async: false }),
-    };
-  }
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  url.searchParams.set("async", "false");
 
-  const res = await fetch(url, init);
+  const res = await fetch(url, { headers: { "X-API-KEY": key } });
   if (!res.ok && res.status !== 202) {
     const body = await res.text();
     throw new Error(`Outscraper request failed (${res.status}): ${body}`);
@@ -161,24 +139,6 @@ function asNumber(v: unknown): number | null {
   return null;
 }
 
-export async function searchPlaces(query: string): Promise<PlaceSearchResult[]> {
-  // Outscraper's speed-optimized real-time search endpoint.
-  const places = await outscraperRequest("/google-maps-search", {
-    method: "POST",
-    body: { query: [query], organizationsPerQueryLimit: 10, language: "en" },
-  });
-
-  return places
-    .filter((p) => asString(p.place_id))
-    .map((p) => ({
-      placeId: asString(p.place_id) as string,
-      name: asString(p.name) ?? "Unknown",
-      address: asString(p.full_address) ?? "",
-      rating: asNumber(p.rating) ?? undefined,
-      userRatingCount: asNumber(p.reviews) ?? undefined,
-    }));
-}
-
 function mapReview(r: Record<string, unknown>): PlaceReview {
   // Outscraper spells the author fields "autor_*".
   const timestamp = asNumber(r.review_timestamp);
@@ -202,20 +162,23 @@ function mapReview(r: Record<string, unknown>): PlaceReview {
   };
 }
 
-export async function getPlaceDetails(placeId: string): Promise<PlaceDetails> {
-  const places = await outscraperRequest("/maps/reviews-v3", {
-    method: "GET",
-    params: {
-      query: placeId,
-      reviewsLimit: String(REVIEWS_LIMIT),
-      limit: "1",
-      sort: "newest",
-    },
+/**
+ * `query` can be a Google place_id or a full Google Maps URL / share link —
+ * Outscraper accepts both.
+ */
+export async function getPlaceDetails(query: string): Promise<PlaceDetails> {
+  const places = await outscraperGet("/maps/reviews-v3", {
+    query,
+    reviewsLimit: String(REVIEWS_LIMIT),
+    limit: "1",
+    sort: "newest",
   });
 
   const place = places[0];
   if (!place) {
-    throw new Error(`Outscraper returned no data for place ${placeId}`);
+    throw new Error(
+      `Outscraper returned no data for "${query}" — check that the Google Maps link points to a place.`
+    );
   }
 
   const reviewsData = Array.isArray(place.reviews_data)
@@ -223,7 +186,7 @@ export async function getPlaceDetails(placeId: string): Promise<PlaceDetails> {
     : [];
 
   return {
-    placeId: asString(place.place_id) ?? placeId,
+    placeId: asString(place.place_id) ?? query,
     name: asString(place.name) ?? "Unknown",
     // The reviews endpoint returns "address" where search returns "full_address".
     address: asString(place.full_address) ?? asString(place.address) ?? "",

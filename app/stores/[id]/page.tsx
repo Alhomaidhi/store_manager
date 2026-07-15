@@ -38,8 +38,13 @@ export default async function StorePage({
           <Link href="/" className="text-sm text-[var(--muted)] hover:text-[var(--ink)]">
             ← Dashboard
           </Link>
-          <h1 className="text-2xl font-semibold mt-2">{store.name}</h1>
-          <p className="text-[var(--muted)] text-sm mt-1">{store.address}</p>
+          <h1 className="text-2xl font-semibold mt-2">
+            {store.custom_name?.trim() || store.name}
+          </h1>
+          <p className="text-[var(--muted)] text-sm mt-1">
+            {store.custom_name?.trim() ? `${store.name} · ` : ""}
+            {store.address}
+          </p>
           {store.google_url && (
             <a
               href={store.google_url}
