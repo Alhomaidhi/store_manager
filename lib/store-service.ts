@@ -32,15 +32,28 @@ export async function upsertReviews(
   const now = Date.now();
   let added = 0;
   for (const r of reviews) {
+    // Strongest dedup key first: Outscraper's stable per-review id.
+    if (r.sourceId) {
+      const dup = (await sql`
+        SELECT 1 FROM reviews
+          WHERE store_id = ${storeId} AND review_source_id = ${r.sourceId}
+          LIMIT 1
+      `) as unknown[];
+      if (dup.length > 0) continue;
+    }
+    // author_name is normalized to '' so the (store, author, published_at)
+    // unique constraint applies even to anonymous reviews — Postgres treats
+    // NULLs as distinct, which would let duplicates through.
+    // Targetless ON CONFLICT covers that constraint and the source-id index.
     const rows = (await sql`
       INSERT INTO reviews
-        (id, store_id, author_name, author_url, profile_photo_url,
-         rating, text, language, published_at, fetched_at)
+        (id, store_id, review_source_id, author_name, author_url,
+         profile_photo_url, rating, text, language, published_at, fetched_at)
       VALUES
-        (${randomUUID()}, ${storeId}, ${r.authorName}, ${r.authorUrl},
-         ${r.profilePhotoUrl}, ${r.rating}, ${r.text}, ${r.language},
-         ${r.publishedAt}, ${now})
-      ON CONFLICT (store_id, author_name, published_at) DO NOTHING
+        (${randomUUID()}, ${storeId}, ${r.sourceId}, ${r.authorName ?? ""},
+         ${r.authorUrl}, ${r.profilePhotoUrl}, ${r.rating}, ${r.text},
+         ${r.language}, ${r.publishedAt}, ${now})
+      ON CONFLICT DO NOTHING
       RETURNING id
     `) as Array<{ id: string }>;
     if (rows.length > 0) added += 1;
@@ -66,6 +79,22 @@ async function clearJob(storeId: string): Promise<void> {
       SET pending_request_id = NULL, pending_started_at = NULL
       WHERE id = ${storeId}
   `;
+}
+
+/**
+ * Atomically take ownership of a finished job before ingesting it. The store
+ * page polls while a pull runs, so several requests can see "done" at once —
+ * only the one that wins this UPDATE ingests; the rest report "pending" and
+ * pick up the refreshed data on their next poll.
+ */
+async function claimJob(storeId: string, requestId: string): Promise<boolean> {
+  const rows = (await sql`
+    UPDATE stores
+      SET pending_request_id = NULL, pending_started_at = NULL
+      WHERE id = ${storeId} AND pending_request_id = ${requestId}
+      RETURNING id
+  `) as unknown[];
+  return rows.length > 0;
 }
 
 async function countReviews(storeId: string): Promise<number> {
@@ -144,7 +173,16 @@ export async function syncStore(storeId: string): Promise<SyncResult> {
         throw err;
       }
       if (result.status === "pending") return { status: "pending" };
-      return ingestJobResult(storeId, result.place);
+      if (!(await claimJob(storeId, pending_request_id))) {
+        return { status: "pending" }; // another request is ingesting it
+      }
+      try {
+        return await ingestJobResult(storeId, result.place);
+      } catch (err) {
+        // Put the job back so its result isn't lost to a transient failure.
+        await markJobPending(storeId, pending_request_id);
+        throw err;
+      }
     }
     // Stale job — its results have expired on Outscraper's side. Fall
     // through and submit a fresh one.
@@ -173,7 +211,15 @@ export async function syncStore(storeId: string): Promise<SyncResult> {
       await clearJob(storeId);
       throw err;
     }
-    if (result.status === "done") return ingestJobResult(storeId, result.place);
+    if (result.status === "done") {
+      if (!(await claimJob(storeId, requestId))) return { status: "pending" };
+      try {
+        return await ingestJobResult(storeId, result.place);
+      } catch (err) {
+        await markJobPending(storeId, requestId);
+        throw err;
+      }
+    }
   }
 
   return { status: "pending" };

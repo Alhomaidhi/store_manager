@@ -21,6 +21,8 @@ function requireKey(): string {
 }
 
 export interface PlaceReview {
+  /** Outscraper's stable per-review id, when present — the strongest dedup key. */
+  sourceId: string | null;
   authorName: string | null;
   authorUrl: string | null;
   profilePhotoUrl: string | null;
@@ -129,7 +131,9 @@ function mapReview(r: Record<string, unknown>): PlaceReview {
   // Outscraper spells the author fields "autor_*".
   const timestamp = asNumber(r.review_timestamp);
   const datetime = asString(r.review_datetime_utc);
-  let publishedAt = Date.now();
+  // IMPORTANT: never default this to "now" — published_at is part of the
+  // dedup key, so an unstable value turns every re-fetch into a duplicate.
+  let publishedAt = 0;
   if (timestamp) {
     publishedAt = timestamp * 1000;
   } else if (datetime) {
@@ -138,6 +142,7 @@ function mapReview(r: Record<string, unknown>): PlaceReview {
   }
 
   return {
+    sourceId: asString(r.review_id) ?? asString(r.review_pagination_id),
     authorName: asString(r.autor_name) ?? asString(r.author_name),
     authorUrl: asString(r.autor_link) ?? asString(r.author_link),
     profilePhotoUrl: asString(r.autor_image) ?? asString(r.author_image),

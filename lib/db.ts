@@ -61,6 +61,29 @@ export function ensureSchema(): Promise<void> {
       `;
       await sql`CREATE INDEX IF NOT EXISTS idx_reviews_store ON reviews(store_id)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_reviews_published ON reviews(store_id, published_at DESC)`;
+      await sql`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS review_source_id TEXT`;
+      // Clean up duplicates created before the dedup key was stabilized:
+      // the same review ingested more than once, differing only in id and
+      // published_at/fetched_at. Keeps the earliest copy. Rows with no
+      // author and no text are left alone — several genuinely distinct
+      // rating-only reviews can look identical.
+      await sql`
+        DELETE FROM reviews a
+        USING reviews b
+        WHERE a.store_id = b.store_id
+          AND a.id <> b.id
+          AND COALESCE(a.author_name, '') = COALESCE(b.author_name, '')
+          AND COALESCE(a.author_url, '') = COALESCE(b.author_url, '')
+          AND COALESCE(a.text, '') = COALESCE(b.text, '')
+          AND a.rating = b.rating
+          AND (COALESCE(a.author_name, '') <> '' OR COALESCE(a.author_url, '') <> '' OR COALESCE(a.text, '') <> '')
+          AND (a.fetched_at, a.id) > (b.fetched_at, b.id)
+      `;
+      await sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_source_id
+          ON reviews(store_id, review_source_id)
+          WHERE review_source_id IS NOT NULL
+      `;
     })().catch((err) => {
       schemaReady = null;
       throw err;
@@ -87,6 +110,7 @@ export interface Store {
 export interface Review {
   id: string;
   store_id: string;
+  review_source_id: string | null;
   author_name: string | null;
   author_url: string | null;
   profile_photo_url: string | null;
@@ -133,6 +157,7 @@ export function mapReview(row: Record<string, unknown>): Review {
   return {
     id: row.id as string,
     store_id: row.store_id as string,
+    review_source_id: (row.review_source_id as string) ?? null,
     author_name: (row.author_name as string) ?? null,
     author_url: (row.author_url as string) ?? null,
     profile_photo_url: (row.profile_photo_url as string) ?? null,
