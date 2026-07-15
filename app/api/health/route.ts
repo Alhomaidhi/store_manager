@@ -31,7 +31,7 @@ export async function GET() {
     /postgres|database|neon|pg_/i.test(k)
   );
 
-  const hasGoogleKey = !!process.env.GOOGLE_PLACES_API_KEY;
+  const hasOutscraperKey = !!process.env.OUTSCRAPER_API;
 
   const chosenUrl =
     process.env.DATABASE_URL ||
@@ -41,14 +41,14 @@ export async function GET() {
   const info: {
     envPresence: Record<string, boolean>;
     postgresLikeEnvKeys: string[];
-    hasGoogleKey: boolean;
+    hasOutscraperKey: boolean;
     chosenConnection: string | null;
     dbPing: { ok: boolean; error?: string; result?: unknown };
     region: string | null;
   } = {
     envPresence,
     postgresLikeEnvKeys: postgresLikeKeys,
-    hasGoogleKey,
+    hasOutscraperKey,
     chosenConnection: summarizeUrl(chosenUrl),
     dbPing: { ok: false },
     region: process.env.VERCEL_REGION ?? null,
