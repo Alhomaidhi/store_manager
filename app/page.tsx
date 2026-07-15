@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getDashboardSummary } from "@/lib/reports";
 import { StarRating } from "@/components/StarRating";
+import { MonthlyVolumeChart, StoreRatingsChart } from "@/components/Charts";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +29,7 @@ export default async function Dashboard() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="card">
           <div className="text-xs text-[var(--muted)] uppercase tracking-wide">
             Stores
@@ -49,7 +50,36 @@ export default async function Dashboard() {
             {summary.avgRating ? summary.avgRating.toFixed(2) : "—"}
           </div>
         </div>
+        <div className="card">
+          <div className="text-xs text-[var(--muted)] uppercase tracking-wide">
+            Last 30 days
+          </div>
+          <div className="text-3xl font-semibold mt-1">{summary.reviewsLast30}</div>
+        </div>
       </div>
+
+      {summary.totalReviews > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card">
+            <h2 className="font-semibold mb-3">Average rating by store</h2>
+            <StoreRatingsChart
+              data={summary.storesByRating
+                .filter((s) => s.avgRating !== null)
+                .sort((a, b) => (b.avgRating ?? 0) - (a.avgRating ?? 0))
+                .map((s) => ({
+                  name: s.name,
+                  avgRating: Number((s.avgRating ?? 0).toFixed(2)),
+                }))}
+            />
+          </div>
+          <div className="card">
+            <h2 className="font-semibold mb-3">
+              Review volume by month (all stores)
+            </h2>
+            <MonthlyVolumeChart data={summary.monthlyVolume} />
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <h2 className="text-lg font-semibold mb-4">Your stores</h2>

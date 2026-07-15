@@ -6,6 +6,14 @@ export interface StoreReport {
   avgRating: number | null;
   ratingDistribution: Record<1 | 2 | 3 | 4 | 5, number>;
   monthlyVolume: Array<{ month: string; count: number; avgRating: number }>;
+  cumulative: Array<{ month: string; total: number }>;
+  sentiment: { positive: number; neutral: number; negative: number };
+  recentStats: {
+    last30Count: number;
+    prev30Count: number;
+    last30Avg: number | null;
+    prev30Avg: number | null;
+  };
   topKeywords: Array<{ word: string; count: number }>;
   recentNegative: Review[];
 }
@@ -57,6 +65,35 @@ export async function getStoreReport(storeId: string): Promise<StoreReport | nul
       avgRating: Number((sum / total).toFixed(2)),
     }));
 
+  let runningTotal = 0;
+  const cumulative = monthlyVolume.map((m) => {
+    runningTotal += m.count;
+    return { month: m.month, total: runningTotal };
+  });
+
+  const sentiment = {
+    positive: ratingDistribution[4] + ratingDistribution[5],
+    neutral: ratingDistribution[3],
+    negative: ratingDistribution[1] + ratingDistribution[2],
+  };
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const last30 = reviews.filter((r) => r.published_at >= now - 30 * DAY);
+  const prev30 = reviews.filter(
+    (r) => r.published_at >= now - 60 * DAY && r.published_at < now - 30 * DAY
+  );
+  const avgOf = (rs: Review[]) =>
+    rs.length === 0
+      ? null
+      : Number((rs.reduce((s, r) => s + r.rating, 0) / rs.length).toFixed(2));
+  const recentStats = {
+    last30Count: last30.length,
+    prev30Count: prev30.length,
+    last30Avg: avgOf(last30),
+    prev30Avg: avgOf(prev30),
+  };
+
   const keywordCounts = new Map<string, number>();
   for (const r of reviews) {
     if (!r.text) continue;
@@ -85,6 +122,9 @@ export async function getStoreReport(storeId: string): Promise<StoreReport | nul
     avgRating,
     ratingDistribution,
     monthlyVolume,
+    cumulative,
+    sentiment,
+    recentStats,
     topKeywords,
     recentNegative,
   };
@@ -94,6 +134,8 @@ export interface DashboardSummary {
   totalStores: number;
   totalReviews: number;
   avgRating: number | null;
+  reviewsLast30: number;
+  monthlyVolume: Array<{ month: string; count: number }>;
   storesByRating: Array<{
     id: string;
     name: string;
@@ -122,6 +164,19 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
 
   const perStoreMap = new Map(perStore.map((p) => [p.store_id, p]));
 
+  const monthRows = (await sql`
+    SELECT to_char(to_timestamp(published_at / 1000), 'YYYY-MM') as month,
+           COUNT(*)::int as c
+      FROM reviews
+      WHERE published_at > 0
+      GROUP BY 1 ORDER BY 1
+  `) as Array<{ month: string; c: number }>;
+
+  const last30Rows = (await sql`
+    SELECT COUNT(*)::int as c FROM reviews
+      WHERE published_at >= ${Date.now() - 30 * 24 * 60 * 60 * 1000}
+  `) as Array<{ c: number }>;
+
   const storesByRating = stores.map((s) => {
     const row = perStoreMap.get(s.id);
     return {
@@ -137,6 +192,8 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     totalStores: stores.length,
     totalReviews: totals[0]?.review_count ?? 0,
     avgRating: totals[0]?.avg_rating ?? null,
+    reviewsLast30: last30Rows[0]?.c ?? 0,
+    monthlyVolume: monthRows.map((m) => ({ month: m.month, count: m.c })),
     storesByRating,
   };
 }
