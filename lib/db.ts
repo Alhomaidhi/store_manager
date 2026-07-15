@@ -44,6 +44,8 @@ export function ensureSchema(): Promise<void> {
       await sql`ALTER TABLE stores ADD COLUMN IF NOT EXISTS custom_name TEXT`;
       await sql`ALTER TABLE stores ADD COLUMN IF NOT EXISTS pending_request_id TEXT`;
       await sql`ALTER TABLE stores ADD COLUMN IF NOT EXISTS pending_started_at BIGINT`;
+      await sql`ALTER TABLE stores ADD COLUMN IF NOT EXISTS pending_full BOOLEAN`;
+      await sql`ALTER TABLE stores ADD COLUMN IF NOT EXISTS history_synced_at BIGINT`;
       await sql`
         CREATE TABLE IF NOT EXISTS reviews (
           id TEXT PRIMARY KEY,
@@ -105,6 +107,8 @@ export interface Store {
   last_synced_at: number | null;
   pending_request_id: string | null;
   pending_started_at: number | null;
+  /** Set once a full-history pull has completed; until then syncs re-pull everything. */
+  history_synced_at: number | null;
 }
 
 export interface Review {
@@ -146,6 +150,7 @@ export function mapStore(row: Record<string, unknown>): Store {
     last_synced_at: toNumOrNull(row.last_synced_at),
     pending_request_id: (row.pending_request_id as string) ?? null,
     pending_started_at: toNumOrNull(row.pending_started_at),
+    history_synced_at: toNumOrNull(row.history_synced_at),
   };
 }
 

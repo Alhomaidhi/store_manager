@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
     // …then pull the full review history as a background job. The store
     // page tracks it and ingests the reviews when it finishes.
     const requestId = await submitReviewsJob(details.placeId);
-    await markJobPending(id, requestId);
+    await markJobPending(id, requestId, true);
     const inserted = (await sql`SELECT * FROM stores WHERE id = ${id}`) as Record<string, unknown>[];
     return NextResponse.json({ store: mapStore(inserted[0]) });
   } catch (err) {
