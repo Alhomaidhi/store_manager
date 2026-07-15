@@ -55,7 +55,7 @@ Open http://localhost:3000. Schema is created automatically on first request.
 
 ## How it works
 
-1. **Add a store** — search by name and city; pick the correct Google Maps result.
+1. **Add a store** — paste the store's Google Maps link (Share → Copy link), and optionally give the branch your own name (e.g. "Olaya Branch") to show instead of the Google listing name.
 2. **Sync** — pulls the most recent reviews (newest first, `OUTSCRAPER_REVIEWS_LIMIT` per sync) from Outscraper. Already-stored reviews are deduplicated, so syncing is safe to repeat.
 3. **Reports** on each store page:
    - Google rating & total ratings

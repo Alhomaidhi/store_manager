@@ -1,4 +1,4 @@
-import { sql, ensureSchema, Review, Store, mapStore, mapReview } from "./db";
+import { sql, ensureSchema, Review, Store, mapStore, mapReview, storeDisplayName } from "./db";
 
 export interface StoreReport {
   store: Store;
@@ -106,7 +106,9 @@ export interface DashboardSummary {
 export async function getDashboardSummary(): Promise<DashboardSummary> {
   await ensureSchema();
 
-  const storeRows = (await sql`SELECT * FROM stores ORDER BY name ASC`) as Record<string, unknown>[];
+  const storeRows = (await sql`
+    SELECT * FROM stores ORDER BY COALESCE(custom_name, name) ASC
+  `) as Record<string, unknown>[];
   const stores = storeRows.map(mapStore);
 
   const totals = (await sql`
@@ -124,7 +126,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     const row = perStoreMap.get(s.id);
     return {
       id: s.id,
-      name: s.name,
+      name: storeDisplayName(s),
       avgRating: row?.a ?? null,
       reviewCount: row?.c ?? 0,
       lastSyncedAt: s.last_synced_at,

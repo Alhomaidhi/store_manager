@@ -29,6 +29,7 @@ export function ensureSchema(): Promise<void> {
           id TEXT PRIMARY KEY,
           place_id TEXT NOT NULL UNIQUE,
           name TEXT NOT NULL,
+          custom_name TEXT,
           address TEXT,
           rating DOUBLE PRECISION,
           total_ratings INTEGER,
@@ -37,6 +38,8 @@ export function ensureSchema(): Promise<void> {
           last_synced_at BIGINT
         )
       `;
+      // Migration for databases created before custom branch names existed.
+      await sql`ALTER TABLE stores ADD COLUMN IF NOT EXISTS custom_name TEXT`;
       await sql`
         CREATE TABLE IF NOT EXISTS reviews (
           id TEXT PRIMARY KEY,
@@ -66,6 +69,7 @@ export interface Store {
   id: string;
   place_id: string;
   name: string;
+  custom_name: string | null;
   address: string | null;
   rating: number | null;
   total_ratings: number | null;
@@ -103,6 +107,7 @@ export function mapStore(row: Record<string, unknown>): Store {
     id: row.id as string,
     place_id: row.place_id as string,
     name: row.name as string,
+    custom_name: (row.custom_name as string) ?? null,
     address: (row.address as string) ?? null,
     rating: toNumOrNull(row.rating),
     total_ratings: toNumOrNull(row.total_ratings),
@@ -110,6 +115,10 @@ export function mapStore(row: Record<string, unknown>): Store {
     created_at: toNum(row.created_at),
     last_synced_at: toNumOrNull(row.last_synced_at),
   };
+}
+
+export function storeDisplayName(store: Store): string {
+  return store.custom_name?.trim() || store.name;
 }
 
 export function mapReview(row: Record<string, unknown>): Review {
