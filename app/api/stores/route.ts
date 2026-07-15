@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { z } from "zod";
 import { sql, ensureSchema, mapStore } from "@/lib/db";
 import { getPlaceDetails } from "@/lib/outscraper";
+import { isGoogleMapsUrl, resolveGoogleMapsQuery } from "@/lib/google-maps-link";
 import { upsertReviews } from "@/lib/store-service";
 
 const createSchema = z
@@ -14,17 +15,6 @@ const createSchema = z
   .refine((v) => v.placeId || v.url, {
     message: "A Google Maps link or placeId is required",
   });
-
-function isGoogleMapsUrl(raw: string): boolean {
-  try {
-    const host = new URL(raw).hostname.toLowerCase();
-    // Full links (google.com/maps, maps.google.com, google.com.sa, …)
-    // and share links (maps.app.goo.gl, goo.gl/maps).
-    return /(^|\.)google\.[a-z.]+$/.test(host) || /(^|\.)goo\.gl$/.test(host);
-  } catch {
-    return false;
-  }
-}
 
 function errorJson(err: unknown, status = 500) {
   const message = err instanceof Error ? err.message : String(err);
@@ -75,8 +65,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Outscraper accepts Google Maps URLs and place IDs as the query.
-    const details = await getPlaceDetails(url ?? placeId!);
+    // Expand share links and extract the exact place identifier so
+    // Outscraper can't mis-resolve the link as a text search.
+    const query = url ? await resolveGoogleMapsQuery(url) : placeId!;
+    const details = await getPlaceDetails(query);
 
     const existing = (await sql`
       SELECT * FROM stores WHERE place_id = ${details.placeId}
