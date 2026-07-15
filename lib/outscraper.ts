@@ -1,14 +1,15 @@
 const API_KEY = process.env.OUTSCRAPER_API;
 const BASE = "https://api.app.outscraper.com";
 
-// Outscraper charges per review, so the per-sync fetch size is configurable.
-const DEFAULT_REVIEWS_LIMIT = 100;
-const REVIEWS_LIMIT =
-  Number.parseInt(process.env.OUTSCRAPER_REVIEWS_LIMIT ?? "", 10) ||
-  DEFAULT_REVIEWS_LIMIT;
+// 0 = pull every review (Outscraper's "unlimited"). Set the env var to a
+// positive number to cap the full-history pull and its cost.
+const envLimit = Number.parseInt(process.env.OUTSCRAPER_REVIEWS_LIMIT ?? "", 10);
+const REVIEWS_LIMIT = Number.isNaN(envLimit) || envLimit < 0 ? 0 : envLimit;
 
-const POLL_INTERVAL_MS = 3000;
-const POLL_TIMEOUT_MS = 90_000;
+const POLL_INTERVAL_MS = 5000;
+// Only used for the small synchronous summary fetch; big pulls are tracked
+// as persistent jobs and never block a request this long.
+const SYNC_POLL_TIMEOUT_MS = 60_000;
 
 function requireKey(): string {
   if (!API_KEY) {
@@ -39,6 +40,10 @@ export interface PlaceDetails {
   reviews: PlaceReview[];
 }
 
+export type ReviewsJobResult =
+  | { status: "pending" }
+  | { status: "done"; place: PlaceDetails | null };
+
 interface OutscraperResponse {
   id?: string;
   status?: string;
@@ -52,39 +57,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Outscraper may answer a request asynchronously (HTTP 202 / status "Pending")
- * even when async=false is requested. Poll the results location until the job
- * finishes or the timeout is hit.
- */
-async function pollResults(
-  resultsLocation: string,
-  key: string
-): Promise<OutscraperResponse> {
-  const deadline = Date.now() + POLL_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await sleep(POLL_INTERVAL_MS);
-    const res = await fetch(resultsLocation, {
-      headers: { "X-API-KEY": key },
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Outscraper polling failed (${res.status}): ${body}`);
-    }
-    const data = (await res.json()) as OutscraperResponse;
-    if (data.status && data.status !== "Pending") return data;
-  }
-  throw new Error("Outscraper request timed out — try again in a minute.");
-}
-
-async function outscraperGet(
+async function outscraperFetch(
   path: string,
-  params: Record<string, string>
-): Promise<Record<string, unknown>[]> {
+  params: Record<string, string>,
+  asyncMode: boolean
+): Promise<OutscraperResponse> {
   const key = requireKey();
   const url = new URL(`${BASE}${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  url.searchParams.set("async", "false");
+  url.searchParams.set("async", asyncMode ? "true" : "false");
 
   const res = await fetch(url, { headers: { "X-API-KEY": key } });
   if (!res.ok && res.status !== 202) {
@@ -92,27 +73,32 @@ async function outscraperGet(
     throw new Error(`Outscraper request failed (${res.status}): ${body}`);
   }
 
-  let payload = (await res.json()) as OutscraperResponse;
-  if (payload.status === "Pending") {
-    const location =
-      payload.results_location ??
-      (payload.id ? `${BASE}/requests/${payload.id}` : null);
-    if (!location) {
-      throw new Error("Outscraper returned a pending job without a results location.");
-    }
-    payload = await pollResults(location, key);
-  }
-
+  const payload = (await res.json()) as OutscraperResponse;
   if (payload.status === "Error" || payload.error) {
     throw new Error(
       `Outscraper request failed: ${payload.errorMessage ?? "unknown error"}`
     );
   }
+  return payload;
+}
 
-  // data comes back as an array with one entry per query; entries may be a
-  // plain record or a nested array of records depending on the endpoint.
+async function getJobStatus(requestId: string): Promise<OutscraperResponse> {
+  const key = requireKey();
+  const res = await fetch(`${BASE}/requests/${encodeURIComponent(requestId)}`, {
+    headers: { "X-API-KEY": key },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Outscraper job status failed (${res.status}): ${body}`);
+  }
+  return (await res.json()) as OutscraperResponse;
+}
+
+// data comes back as an array with one entry per query; entries may be a
+// plain record or a nested array of records depending on the endpoint.
+function flattenData(data: unknown[] | undefined): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
-  for (const item of payload.data ?? []) {
+  for (const item of data ?? []) {
     if (Array.isArray(item)) {
       for (const inner of item) {
         if (inner && typeof inner === "object") {
@@ -162,31 +148,16 @@ function mapReview(r: Record<string, unknown>): PlaceReview {
   };
 }
 
-/**
- * `query` can be a Google place_id or a full Google Maps URL / share link —
- * Outscraper accepts both.
- */
-export async function getPlaceDetails(query: string): Promise<PlaceDetails> {
-  const places = await outscraperGet("/maps/reviews-v3", {
-    query,
-    reviewsLimit: String(REVIEWS_LIMIT),
-    limit: "1",
-    sort: "newest",
-  });
-
-  const place = places[0];
-  if (!place) {
-    throw new Error(
-      `Outscraper returned no data for "${query}" — check that the Google Maps link points to a place.`
-    );
-  }
-
+function parsePlace(
+  place: Record<string, unknown>,
+  fallbackPlaceId: string
+): PlaceDetails {
   const reviewsData = Array.isArray(place.reviews_data)
     ? (place.reviews_data as Record<string, unknown>[])
     : [];
 
   return {
-    placeId: asString(place.place_id) ?? query,
+    placeId: asString(place.place_id) ?? fallbackPlaceId,
     name: asString(place.name) ?? "Unknown",
     // The reviews endpoint returns "address" where search returns "full_address".
     address: asString(place.full_address) ?? asString(place.address) ?? "",
@@ -195,4 +166,94 @@ export async function getPlaceDetails(query: string): Promise<PlaceDetails> {
     googleUrl: asString(place.location_link),
     reviews: reviewsData.map(mapReview),
   };
+}
+
+function reviewParams(query: string, reviewsLimit: number): Record<string, string> {
+  return {
+    query,
+    reviewsLimit: String(reviewsLimit),
+    limit: "1",
+    sort: "newest",
+  };
+}
+
+/**
+ * Fast synchronous lookup of a place (with at most one review) — used when
+ * adding a store so it appears immediately. `query` can be a Google place_id,
+ * a google_id (0x…:0x…), or a full Google Maps URL.
+ */
+export async function fetchPlaceSummary(query: string): Promise<PlaceDetails> {
+  let payload = await outscraperFetch(
+    "/maps/reviews-v3",
+    reviewParams(query, 1),
+    false
+  );
+
+  // Even sync requests can be answered as a queued job; wait briefly.
+  if (payload.status === "Pending" && payload.id) {
+    const jobId = payload.id;
+    const deadline = Date.now() + SYNC_POLL_TIMEOUT_MS;
+    while (payload.status === "Pending" && Date.now() < deadline) {
+      await sleep(POLL_INTERVAL_MS);
+      payload = await getJobStatus(jobId);
+    }
+    if (payload.status === "Pending") {
+      throw new Error("Outscraper is taking too long — try again in a minute.");
+    }
+    if (payload.status === "Error" || payload.error) {
+      throw new Error(
+        `Outscraper request failed: ${payload.errorMessage ?? "unknown error"}`
+      );
+    }
+  }
+
+  const place = flattenData(payload.data)[0];
+  if (!place) {
+    throw new Error(
+      `Outscraper returned no data for "${query}" — check that the Google Maps link points to a place with at least one review.`
+    );
+  }
+  return parsePlace(place, query);
+}
+
+/**
+ * Submit a review pull as a persistent Outscraper job and return its request
+ * id. Pass `sinceTimestamp` (ms) to only fetch reviews newer than it
+ * (inclusive) via Outscraper's `cutoff`; omit it for a full-history pull.
+ */
+export async function submitReviewsJob(
+  query: string,
+  sinceTimestamp?: number
+): Promise<string> {
+  const params = reviewParams(query, REVIEWS_LIMIT);
+  if (sinceTimestamp) {
+    params.cutoff = String(Math.floor(sinceTimestamp / 1000));
+  }
+
+  const payload = await outscraperFetch("/maps/reviews-v3", params, true);
+  if (!payload.id) {
+    throw new Error("Outscraper did not return a job id for the review pull.");
+  }
+  return payload.id;
+}
+
+/**
+ * Check a submitted job once. Throws if the job failed; `place` is null when
+ * the job finished but found nothing (e.g. no reviews newer than the cutoff).
+ */
+export async function checkReviewsJob(
+  requestId: string,
+  fallbackPlaceId: string
+): Promise<ReviewsJobResult> {
+  const payload = await getJobStatus(requestId);
+
+  if (payload.status === "Pending") return { status: "pending" };
+  if (payload.status === "Error" || payload.error) {
+    throw new Error(
+      `Outscraper review pull failed: ${payload.errorMessage ?? "unknown error"}`
+    );
+  }
+
+  const place = flattenData(payload.data)[0];
+  return { status: "done", place: place ? parsePlace(place, fallbackPlaceId) : null };
 }

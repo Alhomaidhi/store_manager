@@ -41,7 +41,7 @@ DATABASE_URL=postgres://...
 OUTSCRAPER_API=your_key_here
 ```
 
-Optional: `OUTSCRAPER_REVIEWS_LIMIT` sets how many reviews are pulled per sync (default `100`). Raise it for a one-off backfill of full history, lower it to keep per-sync cost down.
+Optional: `OUTSCRAPER_REVIEWS_LIMIT` caps how many reviews are pulled per request (default `0` = all). Only needed if you want to bound the cost of the initial full-history pull.
 
 **On Vercel:** add both `DATABASE_URL` (or use Vercel Postgres, which sets `POSTGRES_URL` automatically) and `OUTSCRAPER_API` under Project Settings → Environment Variables.
 
@@ -56,7 +56,7 @@ Open http://localhost:3000. Schema is created automatically on first request.
 ## How it works
 
 1. **Add a store** — paste the store's Google Maps link (Share → Copy link), and optionally give the branch your own name (e.g. "Olaya Branch") to show instead of the Google listing name.
-2. **Sync** — pulls the most recent reviews (newest first, `OUTSCRAPER_REVIEWS_LIMIT` per sync) from Outscraper. Already-stored reviews are deduplicated, so syncing is safe to repeat.
+2. **Sync** — the first sync (which happens automatically when a store is added) pulls the store's full review history. Later syncs are incremental: only reviews newer than the newest stored one are fetched, so repeat syncs stay cheap.
 3. **Reports** on each store page:
    - Google rating & total ratings
    - Rating distribution (1★–5★) across stored reviews
@@ -66,8 +66,8 @@ Open http://localhost:3000. Schema is created automatically on first request.
 
 ## Notes on syncing
 
-- Outscraper requests can take a while for large review counts — the app polls until the job finishes (up to 90 seconds). If a sync times out, just retry.
-- The default of 100 reviews per sync keeps costs predictable. For an initial backfill of a store's full history, temporarily raise `OUTSCRAPER_REVIEWS_LIMIT`, sync once, then set it back.
+- Review pulls run as persistent Outscraper jobs tracked on the store row (`pending_request_id`), so they can take as long as they need — no request timeout can lose them. Adding a store is instant (a quick 1-review lookup), and the full history streams in behind it; the store page polls and ingests the result automatically when the job finishes.
+- Outscraper bills per review. The full pull happens once per store; incremental syncs only pay for new reviews. Polling a tracked job never re-bills.
 
 ## Deploy
 

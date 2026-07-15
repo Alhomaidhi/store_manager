@@ -57,10 +57,20 @@ export default async function StorePage({
           )}
         </div>
         <div className="flex gap-2">
-          <SyncButton storeId={store.id} />
+          <SyncButton
+            storeId={store.id}
+            initialPending={!!store.pending_request_id}
+          />
           <DeleteButton storeId={store.id} />
         </div>
       </div>
+
+      {store.pending_request_id && (
+        <div className="card text-sm text-[var(--muted)]">
+          Review pull in progress — large stores can take a few minutes. The
+          reports below update automatically as soon as it finishes.
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="card">
@@ -173,8 +183,8 @@ export default async function StorePage({
       </div>
 
       <div className="text-xs text-[var(--muted)] text-center pt-4">
-        Each sync pulls the most recent reviews via Outscraper (100 by
-        default). Click <b>Sync now</b> periodically to keep history fresh.
+        The first sync pulls the full review history; after that, syncs only
+        fetch new reviews. Click <b>Sync now</b> periodically to stay current.
       </div>
     </div>
   );
