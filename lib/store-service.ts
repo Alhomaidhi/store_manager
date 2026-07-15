@@ -37,7 +37,30 @@ export async function syncStore(storeId: string): Promise<{
   `) as Array<{ place_id: string }>;
   if (storeRows.length === 0) throw new Error("Store not found");
 
-  const details = await getPlaceDetails(storeRows[0].place_id);
+  // Incremental sync: only fetch reviews newer than the newest one stored.
+  // The cutoff is inclusive, so the newest stored review comes back too
+  // (deduped on insert) — which guarantees place info is returned and the
+  // store's rating/name stay fresh. First sync (no reviews) pulls everything.
+  const newestRows = (await sql`
+    SELECT MAX(published_at) as ts FROM reviews WHERE store_id = ${storeId}
+  `) as Array<{ ts: string | number | null }>;
+  const newestTs = newestRows[0]?.ts ? Number(newestRows[0].ts) : undefined;
+
+  const details = await getPlaceDetails(storeRows[0].place_id, {
+    sinceTimestamp: newestTs,
+  });
+
+  if (!details) {
+    // Nothing new and no place info returned — just record the sync time.
+    await sql`
+      UPDATE stores SET last_synced_at = ${Date.now()} WHERE id = ${storeId}
+    `;
+    const countRows = (await sql`
+      SELECT COUNT(*)::int as c FROM reviews WHERE store_id = ${storeId}
+    `) as Array<{ c: number }>;
+    return { added: 0, totalReviews: countRows[0]?.c ?? 0 };
+  }
+
   const added = await upsertReviews(storeId, details.reviews);
 
   await sql`

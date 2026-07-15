@@ -80,7 +80,9 @@ export default function AddStorePage() {
         </div>
 
         <button className="btn btn-primary" type="submit" disabled={adding}>
-          {adding ? "Adding… (fetching reviews can take a minute)" : "Add store"}
+          {adding
+            ? "Adding… (pulling the full review history — large stores can take a few minutes)"
+            : "Add store"}
         </button>
 
         {error && (

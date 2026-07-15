@@ -1,14 +1,17 @@
 const API_KEY = process.env.OUTSCRAPER_API;
 const BASE = "https://api.app.outscraper.com";
 
-// Outscraper charges per review, so the per-sync fetch size is configurable.
-const DEFAULT_REVIEWS_LIMIT = 100;
-const REVIEWS_LIMIT =
-  Number.parseInt(process.env.OUTSCRAPER_REVIEWS_LIMIT ?? "", 10) ||
-  DEFAULT_REVIEWS_LIMIT;
+// 0 = pull every review (Outscraper's "unlimited"). Set the env var to a
+// positive number to cap the per-request fetch and its cost.
+const envLimit = Number.parseInt(process.env.OUTSCRAPER_REVIEWS_LIMIT ?? "", 10);
+const REVIEWS_LIMIT = Number.isNaN(envLimit) || envLimit < 0 ? 0 : envLimit;
 
-const POLL_INTERVAL_MS = 3000;
-const POLL_TIMEOUT_MS = 90_000;
+// Unlimited/large pulls run as async jobs on Outscraper's side (their SDK
+// forces async when reviewsLimit is 0 or >499), so we submit async and poll.
+const FORCE_ASYNC = REVIEWS_LIMIT === 0 || REVIEWS_LIMIT > 499;
+
+const POLL_INTERVAL_MS = 5000;
+const POLL_TIMEOUT_MS = 270_000; // keep under the route's 300s maxDuration
 
 function requireKey(): string {
   if (!API_KEY) {
@@ -79,12 +82,13 @@ async function pollResults(
 
 async function outscraperGet(
   path: string,
-  params: Record<string, string>
+  params: Record<string, string>,
+  asyncMode: boolean
 ): Promise<Record<string, unknown>[]> {
   const key = requireKey();
   const url = new URL(`${BASE}${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  url.searchParams.set("async", "false");
+  url.searchParams.set("async", asyncMode ? "true" : "false");
 
   const res = await fetch(url, { headers: { "X-API-KEY": key } });
   if (!res.ok && res.status !== 202) {
@@ -162,20 +166,40 @@ function mapReview(r: Record<string, unknown>): PlaceReview {
   };
 }
 
+export interface GetPlaceDetailsOptions {
+  /**
+   * Only fetch reviews published at or after this time (ms since epoch).
+   * Maps to Outscraper's `cutoff` param — used for incremental syncs so we
+   * don't pay to re-download the full history every time. Returns null when
+   * Outscraper finds nothing at all for the query (no place info is returned
+   * without at least one matching review).
+   */
+  sinceTimestamp?: number;
+}
+
 /**
- * `query` can be a Google place_id or a full Google Maps URL / share link —
- * Outscraper accepts both.
+ * `query` can be a Google place_id, a google_id (0x…:0x…), or a full Google
+ * Maps URL — Outscraper accepts all of them.
  */
-export async function getPlaceDetails(query: string): Promise<PlaceDetails> {
-  const places = await outscraperGet("/maps/reviews-v3", {
+export async function getPlaceDetails(
+  query: string,
+  opts: GetPlaceDetailsOptions = {}
+): Promise<PlaceDetails | null> {
+  const params: Record<string, string> = {
     query,
     reviewsLimit: String(REVIEWS_LIMIT),
     limit: "1",
     sort: "newest",
-  });
+  };
+  if (opts.sinceTimestamp) {
+    params.cutoff = String(Math.floor(opts.sinceTimestamp / 1000));
+  }
+
+  const places = await outscraperGet("/maps/reviews-v3", params, FORCE_ASYNC);
 
   const place = places[0];
   if (!place) {
+    if (opts.sinceTimestamp) return null;
     throw new Error(
       `Outscraper returned no data for "${query}" — check that the Google Maps link points to a place.`
     );

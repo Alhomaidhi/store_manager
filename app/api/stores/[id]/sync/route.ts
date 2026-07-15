@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { syncStore } from "@/lib/store-service";
 
+// Full review pulls run as async Outscraper jobs that can take minutes.
+export const maxDuration = 300;
+
 export async function POST(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }

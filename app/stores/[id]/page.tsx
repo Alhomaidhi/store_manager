@@ -173,8 +173,8 @@ export default async function StorePage({
       </div>
 
       <div className="text-xs text-[var(--muted)] text-center pt-4">
-        Each sync pulls the most recent reviews via Outscraper (100 by
-        default). Click <b>Sync now</b> periodically to keep history fresh.
+        The first sync pulls the full review history; after that, syncs only
+        fetch new reviews. Click <b>Sync now</b> periodically to stay current.
       </div>
     </div>
   );

@@ -6,6 +6,9 @@ import { getPlaceDetails } from "@/lib/outscraper";
 import { isGoogleMapsUrl, resolveGoogleMapsQuery } from "@/lib/google-maps-link";
 import { upsertReviews } from "@/lib/store-service";
 
+// Adding a store pulls its full review history, which can take minutes.
+export const maxDuration = 300;
+
 const createSchema = z
   .object({
     placeId: z.string().min(1).optional(),
@@ -69,6 +72,12 @@ export async function POST(req: NextRequest) {
     // Outscraper can't mis-resolve the link as a text search.
     const query = url ? await resolveGoogleMapsQuery(url) : placeId!;
     const details = await getPlaceDetails(query);
+    if (!details) {
+      return NextResponse.json(
+        { error: "No place found for that link." },
+        { status: 404 }
+      );
+    }
 
     const existing = (await sql`
       SELECT * FROM stores WHERE place_id = ${details.placeId}
