@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import { sql, ensureSchema } from "./db";
 import {
   PlaceDetails,
@@ -24,51 +23,65 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Rows per INSERT statement. A full history lands in a handful of queries —
+// inserting row-by-row over the HTTP driver took minutes for large stores,
+// which let serverless time limits interrupt ingestion partway through.
+const INSERT_CHUNK = 500;
+
 export async function upsertReviews(
   storeId: string,
   reviews: PlaceReview[]
 ): Promise<number> {
   await ensureSchema();
+  if (reviews.length === 0) return 0;
   const now = Date.now();
   let added = 0;
-  for (const r of reviews) {
-    // Strongest dedup key first: Outscraper's stable per-review id.
-    if (r.sourceId) {
-      const dup = (await sql`
-        SELECT 1 FROM reviews
-          WHERE store_id = ${storeId} AND review_source_id = ${r.sourceId}
-          LIMIT 1
-      `) as unknown[];
-      if (dup.length > 0) continue;
-    }
-    // author_name is normalized to '' so the (store, author, published_at)
-    // unique constraint applies even to anonymous reviews — Postgres treats
-    // NULLs as distinct, which would let duplicates through.
-    // Targetless ON CONFLICT covers that constraint and the source-id index.
+  for (let i = 0; i < reviews.length; i += INSERT_CHUNK) {
+    const chunk = reviews.slice(i, i + INSERT_CHUNK).map((r) => ({
+      review_source_id: r.sourceId,
+      // Normalized to '' so the (store, author, published_at) unique
+      // constraint applies even to anonymous reviews — Postgres treats
+      // NULLs as distinct, which would let duplicates through.
+      author_name: r.authorName ?? "",
+      author_url: r.authorUrl,
+      profile_photo_url: r.profilePhotoUrl,
+      rating: r.rating,
+      text: r.text,
+      language: r.language,
+      published_at: r.publishedAt,
+    }));
+    // Targetless ON CONFLICT dedupes against every unique key — the
+    // (store, author, published_at) constraint and the source-id index —
+    // including collisions within this same statement.
     const rows = (await sql`
       INSERT INTO reviews
         (id, store_id, review_source_id, author_name, author_url,
          profile_photo_url, rating, text, language, published_at, fetched_at)
-      VALUES
-        (${randomUUID()}, ${storeId}, ${r.sourceId}, ${r.authorName ?? ""},
-         ${r.authorUrl}, ${r.profilePhotoUrl}, ${r.rating}, ${r.text},
-         ${r.language}, ${r.publishedAt}, ${now})
+      SELECT gen_random_uuid()::text, ${storeId}, r.review_source_id,
+             r.author_name, r.author_url, r.profile_photo_url, r.rating,
+             r.text, r.language, r.published_at, ${now}
+        FROM jsonb_to_recordset(${JSON.stringify(chunk)}::jsonb) AS r(
+          review_source_id TEXT, author_name TEXT, author_url TEXT,
+          profile_photo_url TEXT, rating INTEGER, text TEXT, language TEXT,
+          published_at BIGINT)
       ON CONFLICT DO NOTHING
       RETURNING id
     `) as Array<{ id: string }>;
-    if (rows.length > 0) added += 1;
+    added += rows.length;
   }
   return added;
 }
 
 export async function markJobPending(
   storeId: string,
-  requestId: string
+  requestId: string,
+  isFullPull: boolean
 ): Promise<void> {
   await sql`
     UPDATE stores
       SET pending_request_id = ${requestId},
-          pending_started_at = ${Date.now()}
+          pending_started_at = ${Date.now()},
+          pending_full = ${isFullPull}
       WHERE id = ${storeId}
   `;
 }
@@ -106,7 +119,8 @@ async function countReviews(storeId: string): Promise<number> {
 
 async function ingestJobResult(
   storeId: string,
-  place: PlaceDetails | null
+  place: PlaceDetails | null,
+  wasFullPull: boolean
 ): Promise<SyncResult> {
   let added = 0;
   if (place) {
@@ -133,6 +147,12 @@ async function ingestJobResult(
         WHERE id = ${storeId}
     `;
   }
+  if (wasFullPull) {
+    // Only after a completed full pull may future syncs go incremental.
+    await sql`
+      UPDATE stores SET history_synced_at = ${Date.now()} WHERE id = ${storeId}
+    `;
+  }
   return { status: "completed", added, totalReviews: await countReviews(storeId) };
 }
 
@@ -152,15 +172,19 @@ export async function syncStore(storeId: string): Promise<SyncResult> {
   await ensureSchema();
 
   const storeRows = (await sql`
-    SELECT place_id, pending_request_id, pending_started_at
+    SELECT place_id, pending_request_id, pending_started_at, pending_full,
+           history_synced_at
       FROM stores WHERE id = ${storeId}
   `) as Array<{
     place_id: string;
     pending_request_id: string | null;
     pending_started_at: string | number | null;
+    pending_full: boolean | null;
+    history_synced_at: string | number | null;
   }>;
   if (storeRows.length === 0) throw new Error("Store not found");
-  const { place_id, pending_request_id, pending_started_at } = storeRows[0];
+  const { place_id, pending_request_id, pending_started_at, pending_full, history_synced_at } =
+    storeRows[0];
 
   if (pending_request_id) {
     const startedAt = pending_started_at ? Number(pending_started_at) : 0;
@@ -177,10 +201,10 @@ export async function syncStore(storeId: string): Promise<SyncResult> {
         return { status: "pending" }; // another request is ingesting it
       }
       try {
-        return await ingestJobResult(storeId, result.place);
+        return await ingestJobResult(storeId, result.place, !!pending_full);
       } catch (err) {
         // Put the job back so its result isn't lost to a transient failure.
-        await markJobPending(storeId, pending_request_id);
+        await markJobPending(storeId, pending_request_id, !!pending_full);
         throw err;
       }
     }
@@ -189,17 +213,24 @@ export async function syncStore(storeId: string): Promise<SyncResult> {
     await clearJob(storeId);
   }
 
-  // Incremental sync: only fetch reviews newer than the newest one stored.
-  // The cutoff is inclusive, so the newest stored review comes back too
-  // (deduped on insert) — which guarantees place info is returned and the
-  // store's rating/name stay fresh. First sync (no reviews) pulls everything.
-  const newestRows = (await sql`
-    SELECT MAX(published_at) as ts FROM reviews WHERE store_id = ${storeId}
-  `) as Array<{ ts: string | number | null }>;
-  const newestTs = newestRows[0]?.ts ? Number(newestRows[0].ts) : undefined;
+  // Until a full-history pull has verifiably completed, every sync re-pulls
+  // everything (dedup makes that safe) — anchoring the cutoff at the newest
+  // stored review after a partial ingest would permanently skip the older
+  // tail. Once complete, syncs go incremental: only reviews newer than the
+  // newest stored one. That cutoff is inclusive, so the newest stored review
+  // comes back too (deduped on insert) — which guarantees place info is
+  // returned and the store's rating/name stay fresh.
+  const isFullPull = !history_synced_at;
+  let newestTs: number | undefined;
+  if (!isFullPull) {
+    const newestRows = (await sql`
+      SELECT MAX(published_at) as ts FROM reviews WHERE store_id = ${storeId}
+    `) as Array<{ ts: string | number | null }>;
+    newestTs = newestRows[0]?.ts ? Number(newestRows[0].ts) : undefined;
+  }
 
   const requestId = await submitReviewsJob(place_id, newestTs);
-  await markJobPending(storeId, requestId);
+  await markJobPending(storeId, requestId, isFullPull);
 
   const deadline = Date.now() + INLINE_WAIT_MS;
   while (Date.now() < deadline) {
@@ -214,9 +245,9 @@ export async function syncStore(storeId: string): Promise<SyncResult> {
     if (result.status === "done") {
       if (!(await claimJob(storeId, requestId))) return { status: "pending" };
       try {
-        return await ingestJobResult(storeId, result.place);
+        return await ingestJobResult(storeId, result.place, isFullPull);
       } catch (err) {
-        await markJobPending(storeId, requestId);
+        await markJobPending(storeId, requestId, isFullPull);
         throw err;
       }
     }
