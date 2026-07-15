@@ -2,12 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { sql, ensureSchema, mapStore } from "@/lib/db";
-import { getPlaceDetails } from "@/lib/outscraper";
+import { fetchPlaceSummary, submitReviewsJob } from "@/lib/outscraper";
 import { isGoogleMapsUrl, resolveGoogleMapsQuery } from "@/lib/google-maps-link";
-import { upsertReviews } from "@/lib/store-service";
+import { markJobPending, upsertReviews } from "@/lib/store-service";
 
-// Adding a store pulls its full review history, which can take minutes.
-export const maxDuration = 300;
+export const maxDuration = 120;
 
 const createSchema = z
   .object({
@@ -71,13 +70,9 @@ export async function POST(req: NextRequest) {
     // Expand share links and extract the exact place identifier so
     // Outscraper can't mis-resolve the link as a text search.
     const query = url ? await resolveGoogleMapsQuery(url) : placeId!;
-    const details = await getPlaceDetails(query);
-    if (!details) {
-      return NextResponse.json(
-        { error: "No place found for that link." },
-        { status: 404 }
-      );
-    }
+
+    // Fast lookup (1 review) so the store appears immediately…
+    const details = await fetchPlaceSummary(query);
 
     const existing = (await sql`
       SELECT * FROM stores WHERE place_id = ${details.placeId}
@@ -96,6 +91,11 @@ export async function POST(req: NextRequest) {
          ${details.rating}, ${details.totalRatings}, ${details.googleUrl}, ${now}, ${now})
     `;
     await upsertReviews(id, details.reviews);
+
+    // …then pull the full review history as a background job. The store
+    // page tracks it and ingests the reviews when it finishes.
+    const requestId = await submitReviewsJob(details.placeId);
+    await markJobPending(id, requestId);
     const inserted = (await sql`SELECT * FROM stores WHERE id = ${id}`) as Record<string, unknown>[];
     return NextResponse.json({ store: mapStore(inserted[0]) });
   } catch (err) {

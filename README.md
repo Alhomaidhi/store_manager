@@ -66,8 +66,8 @@ Open http://localhost:3000. Schema is created automatically on first request.
 
 ## Notes on syncing
 
-- Full-history pulls run as async Outscraper jobs; the app polls until the job finishes (up to ~4.5 minutes, within the routes' 300s `maxDuration`). Stores with tens of thousands of reviews may exceed that — retry the sync after a few minutes, but note a retry submits a new (billed) job.
-- Outscraper bills per review. The full pull happens once per store; incremental syncs only pay for new reviews.
+- Review pulls run as persistent Outscraper jobs tracked on the store row (`pending_request_id`), so they can take as long as they need — no request timeout can lose them. Adding a store is instant (a quick 1-review lookup), and the full history streams in behind it; the store page polls and ingests the result automatically when the job finishes.
+- Outscraper bills per review. The full pull happens once per store; incremental syncs only pay for new reviews. Polling a tracked job never re-bills.
 
 ## Deploy
 

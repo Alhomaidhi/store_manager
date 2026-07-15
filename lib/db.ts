@@ -35,11 +35,15 @@ export function ensureSchema(): Promise<void> {
           total_ratings INTEGER,
           google_url TEXT,
           created_at BIGINT NOT NULL,
-          last_synced_at BIGINT
+          last_synced_at BIGINT,
+          pending_request_id TEXT,
+          pending_started_at BIGINT
         )
       `;
-      // Migration for databases created before custom branch names existed.
+      // Migrations for databases created before these columns existed.
       await sql`ALTER TABLE stores ADD COLUMN IF NOT EXISTS custom_name TEXT`;
+      await sql`ALTER TABLE stores ADD COLUMN IF NOT EXISTS pending_request_id TEXT`;
+      await sql`ALTER TABLE stores ADD COLUMN IF NOT EXISTS pending_started_at BIGINT`;
       await sql`
         CREATE TABLE IF NOT EXISTS reviews (
           id TEXT PRIMARY KEY,
@@ -76,6 +80,8 @@ export interface Store {
   google_url: string | null;
   created_at: number;
   last_synced_at: number | null;
+  pending_request_id: string | null;
+  pending_started_at: number | null;
 }
 
 export interface Review {
@@ -114,6 +120,8 @@ export function mapStore(row: Record<string, unknown>): Store {
     google_url: (row.google_url as string) ?? null,
     created_at: toNum(row.created_at),
     last_synced_at: toNumOrNull(row.last_synced_at),
+    pending_request_id: (row.pending_request_id as string) ?? null,
+    pending_started_at: toNumOrNull(row.pending_started_at),
   };
 }
 

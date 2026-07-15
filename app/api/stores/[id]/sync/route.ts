@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { syncStore } from "@/lib/store-service";
 
-// Full review pulls run as async Outscraper jobs that can take minutes.
-export const maxDuration = 300;
+// Leaves headroom for the inline wait plus Outscraper round-trips; big pulls
+// keep running on Outscraper's side and are picked up by later requests.
+export const maxDuration = 120;
 
 export async function POST(
   _req: Request,
@@ -11,7 +12,9 @@ export async function POST(
   try {
     const { id } = await params;
     const result = await syncStore(id);
-    return NextResponse.json(result);
+    return NextResponse.json(result, {
+      status: result.status === "pending" ? 202 : 200,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Sync failed";
     console.error("[api/stores/[id]/sync]", err);
